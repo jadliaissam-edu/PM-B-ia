@@ -16,3 +16,4 @@ BRANCH = "main"
 
 # --- Filtres de fichiers ---
 ALLOWED_EXTENSIONS = (".java", ".py", ".js", ".ts", ".md", ".xml", ".json", ".txt", ".html", ".css", ".tsx", ".jsx")
+
