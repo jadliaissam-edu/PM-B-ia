@@ -206,7 +206,7 @@ def generate_entity(user_query: str, context: dict, repo_context: str = "") -> d
             "   - 'intent': Le nom de l'entité (ou 'unknown').\n"
             "   - 'endpoint': L'endpoint exact trouvé (ex: POST /api/tasks) (ou null si unknown).\n"
             "   - 'entity': L'objet JSON correspondant aux champs requis par l'API (ou null si unknown). Si l'utilisateur demande plusieurs entités du meme type, retourne un tableau d'objets (max 5).\n"
-            "   - 'explanation': Un message clair en Markdown. Si tu as généré une entité, confirme l'action en précisant quel endpoint sera appelé. Si 'intent' est 'unknown', ce message DOIT lister à l'utilisateur tout ce qu'il peut générer (Space, Folder, List, Sprint, Task, Workspace) en incluant une brève description et l'endpoint Swagger associé pour chaque entité.\n"
+            "   - 'explanation': Un message clair en Markdown. Si tu as généré une entité, confirme l'action d'une manière naturelle et professionnelle SANS MENTIONNER d'endpoint API ni de détails techniques (ne donne jamais l'URL ou le chemin API à l'utilisateur). Si 'intent' est 'unknown', ce message DOIT lister à l'utilisateur tout ce qu'il peut générer (Espace de travail, Espace, Dossier, Liste, Sprint, Tâche) avec une brève description de leur utilité fonctionnelle (sans détails techniques ou endpoints).\n"
             "5. Utilise les IDs du contexte si applicables (ex: workspaceId, spaceId, listeId, folderId, sprintId).\n"
             "6. Si un utilisateur mentionne une personne (ex: 'assigne à Ilyass'), cherche son ID dans la liste 'members' fournie dans le contexte et utilise-le pour 'assigneeId'.\n"
             "7. Pour status utilise TO_DO par defaut. Pour priority utilise MEDIUM par defaut.\n"
@@ -233,16 +233,17 @@ def generate_entity(user_query: str, context: dict, repo_context: str = "") -> d
                             "endpoint": None,
                             "explanation": "Je n'ai pas pu interpreter correctement les entites demandees. Merci de reformuler."
                         }
-                    limited = False
                     if len(entity_items) > 5:
-                        entity_items = entity_items[:5]
-                        limited = True
+                        return {
+                            "intent": "unknown",
+                            "entity": None,
+                            "endpoint": None,
+                            "explanation": "Désolé, je ne peux créer qu'un maximum de 5 éléments à la fois. Veuillez réduire votre demande."
+                        }
                     for item in entity_items:
                         for ctx_key in ["listeId", "spaceId", "workspaceId", "sprintId", "folderId"]:
                             if ctx_key in context and ctx_key not in item:
                                 item[ctx_key] = context[ctx_key]
-                    if limited:
-                        explanation = f"{explanation} (limite a 5 elements)"
                     return {
                         "intent": parsed.get("intent", "unknown"),
                         "entity": entity_items,
