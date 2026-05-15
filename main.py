@@ -273,6 +273,23 @@ async def add_repository(request: AddRepoRequest):
                 detail=f"Erreur GitHub API : {r.status_code}",
             )
         gh_data = r.json()
+        
+        # 1.5. Validate branch existence or fallback to default branch
+        if not request.branch:
+            request.branch = gh_data.get("default_branch", "main")
+        else:
+            branch_url = f"https://api.github.com/repos/{request.owner}/{request.repo}/branches/{request.branch}"
+            br = req.get(branch_url, headers=gh_headers, timeout=5)
+            if br.status_code == 404:
+                # If requested branch doesn't exist, check if default branch works instead
+                default_branch = gh_data.get("default_branch", "main")
+                if request.branch != default_branch:
+                    request.branch = default_branch # Auto-fix to default branch
+                else:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"La branche '{request.branch}' n'existe pas dans ce dépôt.",
+                    )
     except HTTPException:
         raise
     except Exception as exc:
@@ -382,10 +399,22 @@ async def _get_repo_context(
             _resolve_token_for_repo,
             user_id, repo_info.owner, repo_info.repo, repo_info.is_private,
         )
-        files = await asyncio.to_thread(
-            fetch_file_tree,
-            repo_info.owner, repo_info.repo, repo_info.branch, token,
-        )
+        try:
+            files = await asyncio.to_thread(
+                fetch_file_tree,
+                repo_info.owner, repo_info.repo, repo_info.branch, token,
+            )
+        except req.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"La branche '{repo_info.branch}' est introuvable pour le dépôt '{repo_info.owner}/{repo_info.repo}'. Veuillez supprimer le dépôt et le rajouter avec la bonne branche (ex: master)."
+                ) from e
+            raise HTTPException(
+                status_code=e.response.status_code,
+                detail=f"Erreur d'accès au dépôt '{repo_info.owner}/{repo_info.repo}': {e.response.text}"
+            ) from e
+
         repo_key = f"{repo_info.owner}/{repo_info.repo}"
         prefixed = [f"[{repo_key}] {f}" for f in files]
         return repo_key, repo_info, prefixed, token
