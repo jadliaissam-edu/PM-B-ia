@@ -20,15 +20,17 @@ Nettoyage :
 import asyncio
 import json
 import requests as req
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional
 import uvicorn
+import os
+import tempfile
 
 from config.config import LLM_MODEL, BACKEND_BASE_URL
 from services.github_service import fetch_file_tree, fetch_file_content
-from services.rag_service import identify_relevant_files, answer_repo_question, generate_entity
+from services.rag_service import identify_relevant_files, answer_repo_question, generate_entity, generate_ask_ai_content
 from services.encryption_service import encrypt_token, decrypt_token
 
 # ─── Initialisation de l'application ────────────────────────────────────────
@@ -96,6 +98,11 @@ class DeleteRepoRequest(BaseModel):
     owner:   str
     repo:    str
     user_id: str = "anonymous"
+
+
+class AskAIRequest(BaseModel):
+    entity_type: str
+    entity_name: str
 
 
 # ─── Clients HTTP Backend Java ───────────────────────────────────────────────
@@ -508,6 +515,23 @@ async def generate_from_intent(request: GenerateRequest):
         )
         return result
 
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/ia/ask-ai")
+async def ask_ai_generation(request: AskAIRequest):
+    """
+    Endpoint spécialisé pour la génération de contenu (description/objectif)
+    basé sur le nom d'une entité et son type.
+    """
+    try:
+        result = await asyncio.to_thread(
+            generate_ask_ai_content, request.entity_type, request.entity_name
+        )
+        return result
     except Exception as exc:
         import traceback
         traceback.print_exc()

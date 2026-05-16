@@ -330,3 +330,48 @@ def generate_entity(user_query: str, context: dict, repo_context: str = "") -> d
         "endpoint": schema["endpoint"],
         "explanation": f"L'IA a genere un(e) {detected_type} base sur votre demande. Verifiez les details ci-dessous avant de confirmer."
     }
+
+def generate_ask_ai_content(entity_type: str, entity_name: str) -> dict:
+    """
+    Génère une description ou un objectif pour une entité spécifique.
+    """
+    chat = _get_chat()
+
+    prompts = {
+        "space": (
+            f"Tu es un Expert Agile. L'utilisateur crée un Espace nommé '{entity_name}'.\n"
+            "Génère une description très brève (un seul paragraphe) de sa vision et de son utilité.\n"
+            "Pas de listes, pas de tableaux, pas de code. Juste un paragraphe descriptif direct."
+        ),
+        "folder": (
+            f"Tu es un Expert Agile. L'utilisateur crée un Dossier nommé '{entity_name}'.\n"
+            "Génère une description très brève (un seul paragraphe) expliquant ce que ce dossier regroupe.\n"
+            "Pas de listes, pas de tableaux, pas de code. Juste un paragraphe descriptif direct."
+        ),
+        "task": (
+            f"Tu es un Expert Agile. L'utilisateur crée une Tâche nommée '{entity_name}'.\n"
+            "Génère une description très brève (un seul paragraphe) du travail à accomplir.\n"
+            "Pas de listes, pas de tableaux, pas de code. Juste un paragraphe descriptif direct."
+        ),
+        "sprint": (
+            f"Tu es un Expert Agile. L'utilisateur crée un Sprint nommé '{entity_name}'.\n"
+            "Génère un Objectif de Sprint (Sprint Goal) unique, spécifique et très bref.\n"
+            "Une seule phrase percutante qui vise directement l'objectif de valeur."
+        )
+    }
+
+    prompt = prompts.get(entity_type.lower())
+    if not prompt:
+        return {"generated_text": f"Génération pour {entity_name} ({entity_type})."}
+
+    system_instruction = (
+        "Tu agis en tant qu'Expert Agile / Product Owner senior. "
+        "Ta réponse doit être structurée, premium et directement utilisable dans un outil de gestion de projet. "
+        "Réponds UNIQUEMENT avec le contenu textuel généré, sans introduction ni conclusion."
+    )
+
+    response = chat.invoke([
+        HumanMessage(content=f"{system_instruction}\n\n{prompt}")
+    ])
+    
+    return {"generated_text": response.content.strip()}
