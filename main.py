@@ -17,6 +17,10 @@ Nettoyage :
     se fait désormais via le backend Java Spring Boot (PostgreSQL).
 """
 
+import os
+# ─── Résolution du conflit OpenMP (Anaconda Windows) ──────────────────────────
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
 import asyncio
 import json
 import requests as req
@@ -32,6 +36,7 @@ from config.config import LLM_MODEL, BACKEND_BASE_URL
 from services.github_service import fetch_file_tree, fetch_file_content
 from services.rag_service import identify_relevant_files, answer_repo_question, generate_entity, generate_ask_ai_content
 from services.encryption_service import encrypt_token, decrypt_token
+from services.transcription_service import transcribe_audio
 
 # ─── Initialisation de l'application ────────────────────────────────────────
 
@@ -48,6 +53,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def log_errors(request, call_next):
+    try:
+        return await call_next(request)
+    except Exception as e:
+        import traceback
+        print(f"CRITICAL ERROR on {request.url.path}: {str(e)}")
+        traceback.print_exc()
+        raise e
 
 
 # ─── Modèles Pydantic ────────────────────────────────────────────────────────
@@ -536,6 +551,25 @@ async def ask_ai_generation(request: AskAIRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/ia/transcribe")
+async def transcribe_audio_endpoint(
+    audio_file: UploadFile = File(...),
+    language: str = Form("fr")
+):
+    """
+    Endpoint pour la transcription audio via API (Gemini/Whisper via OpenRouter).
+    Remplace la transcription locale pour plus de précision et moins de charge client.
+    """
+    try:
+        content = await audio_file.read()
+        transcription = await transcribe_audio(content, audio_file.filename, language)
+        return {"text": transcription}
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Erreur transcription API : {str(exc)}")
 
 
 # ─── Démarrage ───────────────────────────────────────────────────────────────
