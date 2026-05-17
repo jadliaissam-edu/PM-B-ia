@@ -36,7 +36,6 @@ from config.config import LLM_MODEL, BACKEND_BASE_URL
 from services.github_service import fetch_file_tree, fetch_file_content
 from services.rag_service import identify_relevant_files, answer_repo_question, generate_entity, generate_ask_ai_content
 from services.encryption_service import encrypt_token, decrypt_token
-from services.transcription_service import transcribe_audio
 
 # ─── Initialisation de l'application ────────────────────────────────────────
 
@@ -221,22 +220,18 @@ def _resolve_token_for_repo(
     is_private: bool,
 ) -> Optional[str]:
     """
-    Pour un dépôt privé, récupère le token chiffré depuis le backend Java
-    et le déchiffre en mémoire vive.
-
-    Returns:
-        Le PAT déchiffré (str) si dépôt privé et token disponible, None sinon.
-
-    Raises:
-        HTTPException 403: Si le dépôt est privé mais qu'aucun token n'est enregistré.
-        HTTPException 500: Si le déchiffrement échoue (clé incorrecte/corrompue).
+    Récupère le token chiffré depuis le backend Java (si disponible)
+    et le déchiffre en mémoire vive pour l'utiliser lors des requêtes GitHub.
     """
-    if not is_private:
-        return None
+    # 1. Tenter de récupérer le token chiffré depuis la BDD (backend Java)
+    encrypted_token = None
+    try:
+        encrypted_token = _get_encrypted_token_from_backend(user_id, repo_owner, repo_name)
+    except Exception as e:
+        print(f"[_resolve_token_for_repo] Info: Aucun token récupéré ou erreur backend pour {repo_owner}/{repo_name} : {e}")
 
-    encrypted_token = _get_encrypted_token_from_backend(user_id, repo_owner, repo_name)
-
-    if not encrypted_token:
+    # 2. Si aucun token n'est stocké en BDD mais que le dépôt est déclaré privé
+    if not encrypted_token and is_private:
         raise HTTPException(
             status_code=403,
             detail=(
@@ -245,13 +240,17 @@ def _resolve_token_for_repo(
             ),
         )
 
-    try:
-        return decrypt_token(encrypted_token)
-    except (ValueError, RuntimeError) as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Impossible de déchiffrer le token GitHub : {exc}",
-        ) from exc
+    # 3. Si un token chiffré est trouvé, on le déchiffre
+    if encrypted_token:
+        try:
+            return decrypt_token(encrypted_token)
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Impossible de déchiffrer le token GitHub : {exc}",
+            ) from exc
+
+    return None
 
 
 # ─── Endpoints — Gestion des dépôts ─────────────────────────────────────────
@@ -318,8 +317,9 @@ async def add_repository(request: AddRepoRequest):
         raise HTTPException(status_code=500, detail=f"Impossible de contacter GitHub : {exc}") from exc
 
     # 2. Chiffrer le PAT si le dépôt est privé
+    is_private_resolved = request.is_private or gh_data.get("private", False)
     encrypted_token: Optional[str] = None
-    if request.is_private:
+    if is_private_resolved:
         if not request.github_token:
             raise HTTPException(
                 status_code=422,
@@ -340,7 +340,7 @@ async def add_repository(request: AddRepoRequest):
         request.owner,
         request.repo,
         request.branch,
-        request.is_private,
+        is_private_resolved,
         encrypted_token,
     )
 
@@ -349,8 +349,8 @@ async def add_repository(request: AddRepoRequest):
         "message":        f"Dépôt '{request.owner}/{request.repo}' enregistré avec succès.",
         "full_name":      gh_data.get("full_name"),
         "default_branch": gh_data.get("default_branch", "main"),
-        "is_private":     gh_data.get("private", False),
-        "token_stored":   request.is_private,
+        "is_private":     is_private_resolved,
+        "token_stored":   is_private_resolved,
     }
 
 
@@ -551,25 +551,6 @@ async def ask_ai_generation(request: AskAIRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-
-@app.post("/api/ia/transcribe")
-async def transcribe_audio_endpoint(
-    audio_file: UploadFile = File(...),
-    language: str = Form("fr")
-):
-    """
-    Endpoint pour la transcription audio via API (Gemini/Whisper via OpenRouter).
-    Remplace la transcription locale pour plus de précision et moins de charge client.
-    """
-    try:
-        content = await audio_file.read()
-        transcription = await transcribe_audio(content, audio_file.filename, language)
-        return {"text": transcription}
-    except Exception as exc:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Erreur transcription API : {str(exc)}")
 
 
 # ─── Démarrage ───────────────────────────────────────────────────────────────
