@@ -286,6 +286,7 @@ def generate_entity(user_query: str, context: dict, repo_context: str = "") -> d
         }
 
     schema = ENTITY_SCHEMAS[detected_type]
+    context_map = context if isinstance(context, dict) else {}
     context_str = json.dumps(context, ensure_ascii=False) if context else "Aucun contexte fourni."
     fields_desc = "\n".join([f"  - {k}: {v}" for k, v in schema["fields"].items()])
 
@@ -321,8 +322,8 @@ def generate_entity(user_query: str, context: dict, repo_context: str = "") -> d
 
     # Injecter le contexte si champs manquants
     for ctx_key in ["listeId", "spaceId", "workspaceId", "sprintId"]:
-        if ctx_key in context and ctx_key not in entity_data:
-            entity_data[ctx_key] = context[ctx_key]
+        if ctx_key in context_map and ctx_key not in entity_data:
+            entity_data[ctx_key] = context_map[ctx_key]
 
     return {
         "intent": detected_type,
