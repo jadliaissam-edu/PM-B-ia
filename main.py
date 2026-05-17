@@ -82,7 +82,7 @@ class RepoInfo(BaseModel):
     repo:         str
     branch:       str       = "main"
     is_private:   bool      = False
-    github_token: Optional[str] = Field(default=None, exclude=True)
+    github_token: Optional[str] = None
 
 
 class RepoAnalysisRequest(BaseModel):
@@ -104,7 +104,7 @@ class AddRepoRequest(BaseModel):
     repo:         str
     branch:       str  = "main"
     is_private:   bool = False
-    github_token: Optional[str] = Field(default=None, exclude=True)
+    github_token: Optional[str] = None
     user_id:      str  = "anonymous"
 
 
@@ -223,6 +223,8 @@ def _resolve_token_for_repo(
     Récupère le token chiffré depuis le backend Java (si disponible)
     et le déchiffre en mémoire vive pour l'utiliser lors des requêtes GitHub.
     """
+    print(f"[_resolve_token_for_repo] Résolution du token pour {repo_owner}/{repo_name} | user_id={user_id} | is_private={is_private}")
+    
     # 1. Tenter de récupérer le token chiffré depuis la BDD (backend Java)
     encrypted_token = None
     try:
@@ -243,13 +245,17 @@ def _resolve_token_for_repo(
     # 3. Si un token chiffré est trouvé, on le déchiffre
     if encrypted_token:
         try:
-            return decrypt_token(encrypted_token)
+            decrypted = decrypt_token(encrypted_token)
+            masked = decrypted[:6] + "..." if decrypted else "None"
+            print(f"[_resolve_token_for_repo] Token déchiffré avec succès pour {repo_owner}/{repo_name} (début: {masked})")
+            return decrypted
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(
                 status_code=500,
                 detail=f"Impossible de déchiffrer le token GitHub : {exc}",
             ) from exc
 
+    print(f"[_resolve_token_for_repo] Aucun token trouvé pour {repo_owner}/{repo_name}. Dépôt considéré public.")
     return None
 
 
