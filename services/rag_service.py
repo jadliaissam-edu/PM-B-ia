@@ -186,6 +186,13 @@ def generate_entity(user_query: str, context: dict, repo_context: str = "") -> d
       }
     """
     chat = _get_chat()
+    context_map = context if isinstance(context, dict) else {}
+
+    def _inject_context(entity: dict) -> dict:
+        for ctx_key in ["listeId", "spaceId", "workspaceId", "sprintId", "folderId"]:
+            if ctx_key in context_map and ctx_key not in entity:
+                entity[ctx_key] = context_map[ctx_key]
+        return entity
     
     swagger_docs = fetch_openapi_schemas()
     if swagger_docs:
@@ -244,9 +251,7 @@ def generate_entity(user_query: str, context: dict, repo_context: str = "") -> d
                             "explanation": "Désolé, je ne peux créer qu'un maximum de 5 éléments à la fois. Veuillez réduire votre demande."
                         }
                     for item in entity_items:
-                        for ctx_key in ["listeId", "spaceId", "workspaceId", "sprintId", "folderId"]:
-                            if ctx_key in context and ctx_key not in item:
-                                item[ctx_key] = context[ctx_key]
+                        _inject_context(item)
                     return {
                         "intent": parsed.get("intent", "unknown"),
                         "entity": entity_items,
@@ -254,12 +259,33 @@ def generate_entity(user_query: str, context: dict, repo_context: str = "") -> d
                         "explanation": explanation
                     }
                 if isinstance(entity, dict):
-                    for ctx_key in ["listeId", "spaceId", "workspaceId", "sprintId", "folderId"]:
-                        if ctx_key in context and ctx_key not in entity:
-                            entity[ctx_key] = context[ctx_key]
+                    _inject_context(entity)
                     return {
                         "intent": parsed.get("intent", "unknown"),
                         "entity": entity,
+                        "endpoint": parsed.get("endpoint"),
+                        "explanation": explanation
+                    }
+                if isinstance(entity, list):
+                    entity_items = [item for item in entity if isinstance(item, dict)]
+                    if not entity_items:
+                        return {
+                            "intent": "unknown",
+                            "entity": None,
+                            "endpoint": None,
+                            "explanation": "Je n'ai pas pu interpreter correctement les entites demandees. Merci de reformuler."
+                        }
+                    if len(entity_items) > 5:
+                        return {
+                            "intent": "unknown",
+                            "entity": None,
+                            "endpoint": None,
+                            "explanation": "Désolé, je ne peux créer qu'un maximum de 5 éléments à la fois. Veuillez réduire votre demande."
+                        }
+                    entity_items = [_inject_context(item) for item in entity_items]
+                    return {
+                        "intent": parsed.get("intent", "unknown"),
+                        "entity": entity_items,
                         "endpoint": parsed.get("endpoint"),
                         "explanation": explanation
                     }
@@ -289,7 +315,6 @@ def generate_entity(user_query: str, context: dict, repo_context: str = "") -> d
         }
 
     schema = ENTITY_SCHEMAS[detected_type]
-    context_map = context if isinstance(context, dict) else {}
     context_str = json.dumps(context, ensure_ascii=False) if context else "Aucun contexte fourni."
     fields_desc = "\n".join([f"  - {k}: {v}" for k, v in schema["fields"].items()])
 
@@ -324,10 +349,32 @@ def generate_entity(user_query: str, context: dict, repo_context: str = "") -> d
     except json.JSONDecodeError:
         entity_data = {"title": user_query, "status": "TO_DO", "priority": "MEDIUM"}
 
-    # Injecter le contexte si champs manquants
-    for ctx_key in ["listeId", "spaceId", "workspaceId", "sprintId"]:
-        if ctx_key in context_map and ctx_key not in entity_data:
-            entity_data[ctx_key] = context_map[ctx_key]
+    if isinstance(entity_data, list):
+        entity_data = [item for item in entity_data if isinstance(item, dict)]
+        if not entity_data:
+            return {
+                "intent": "unknown",
+                "entity": None,
+                "endpoint": None,
+                "explanation": "Je n'ai pas pu interpreter correctement les entites demandees. Merci de reformuler."
+            }
+        if len(entity_data) > 5:
+            return {
+                "intent": "unknown",
+                "entity": None,
+                "endpoint": None,
+                "explanation": "Désolé, je ne peux créer qu'un maximum de 5 éléments à la fois. Veuillez réduire votre demande."
+            }
+        entity_data = [_inject_context(item) for item in entity_data]
+    elif isinstance(entity_data, dict):
+        _inject_context(entity_data)
+    else:
+        return {
+            "intent": "unknown",
+            "entity": None,
+            "endpoint": None,
+            "explanation": "Je n'ai pas pu interpreter correctement l'entite demandee. Merci de reformuler."
+        }
 
     return {
         "intent": detected_type,
