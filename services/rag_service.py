@@ -63,7 +63,7 @@ ENTITY_SCHEMAS = {
         "endpoint": "POST /api/tasks",
         "fields": {
             "title": "string (requis) - titre de la tache",
-            "description": "string - description detaillee",
+            "description": "string - description detaillee du travail a accomplir",
             "status": "enum: TO_DO | IN_DEV | IN_TEST | IN_REVIEW | DONE",
             "priority": "enum: LOW | MEDIUM | HIGH | URGENT",
             "dueDate": "string ISO 8601 (ex: 2026-06-01T09:00:00) - date d'echeance",
@@ -83,6 +83,7 @@ ENTITY_SCHEMAS = {
         "endpoint": "POST /api/spaces",
         "fields": {
             "name": "string (requis) - nom du space",
+            "description": "string - description detaillee de l'espace",
             "workspaceId": "string UUID (requis) - ID du workspace parent",
         }
     },
@@ -92,6 +93,7 @@ ENTITY_SCHEMAS = {
             "name": "string (requis) - nom du sprint",
             "startDate": "string ISO 8601 - date de debut",
             "endDate": "string ISO 8601 - date de fin",
+            "goal": "string - objectif du sprint (sprint goal)",
             "spaceId": "string UUID - ID du space parent",
         }
     },
@@ -210,7 +212,8 @@ def generate_entity(user_query: str, context: dict, repo_context: str = "") -> d
             "5. Utilise les IDs du contexte si applicables (ex: workspaceId, spaceId, listeId, folderId, sprintId).\n"
             "6. Si un utilisateur mentionne une personne (ex: 'assigne à Ilyass'), cherche son ID dans la liste 'members' fournie dans le contexte et utilise-le pour 'assigneeId'.\n"
             "7. Pour status utilise TO_DO par defaut. Pour priority utilise MEDIUM par defaut.\n"
-            "8. Retourne UNIQUEMENT le JSON de la réponse, sans markdown en dehors du JSON.\n\n"
+            "8. IMPORTANT : Pour une tâche (task), un dossier (folder) ou un espace (space), génère obligatoirement une description pertinente et élaborée dans le champ 'description'. Pour un sprint, génère obligatoirement un objectif de sprint pertinent dans le champ 'goal'.\n"
+            "9. Retourne UNIQUEMENT le JSON de la réponse, sans markdown en dehors du JSON.\n\n"
             "JSON :"
         )
         
@@ -303,7 +306,8 @@ def generate_entity(user_query: str, context: dict, repo_context: str = "") -> d
         "2. Utilise les IDs du contexte si disponibles (ex: listeId, spaceId, workspaceId).\n"
         "3. Pour les champs optionnels non mentionnes, omets-les.\n"
         "4. Pour status utilise TO_DO par defaut. Pour priority utilise MEDIUM par defaut.\n"
-        "5. Retourne SEULEMENT le JSON, sans markdown, sans explication.\n\n"
+        "5. IMPORTANT : Pour une tâche (task), un dossier (folder) ou un espace (space), génère obligatoirement une description pertinente dans le champ 'description'. Pour un sprint, génère obligatoirement un objectif de sprint pertinent dans le champ 'goal'.\n"
+        "6. Retourne SEULEMENT le JSON, sans markdown, sans explication.\n\n"
         "JSON :"
     )
 
