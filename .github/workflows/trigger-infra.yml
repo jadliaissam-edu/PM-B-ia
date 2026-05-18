@@ -1,0 +1,20 @@
+name: Trigger infra deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  notify-infra:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call infra repo to trigger deploy
+        env:
+          PAT: ${{ secrets.INFRA_REPO_TOKEN }}
+        run: |
+          curl -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $PAT" \
+            https://api.github.com/repos/jadliaissam-edu/PM-B-infra/actions/workflows/simple-ci-cd.yml/dispatches \
+            -d '{"ref":"main"}'
