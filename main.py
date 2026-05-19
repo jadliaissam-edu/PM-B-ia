@@ -528,7 +528,7 @@ async def generate_from_intent(request: GenerateRequest):
             )
             if files_content:
                 repo_context_str = "\n".join(
-                    [f"--- Fichier: {path} ---\n{content}\n" for path, content in files_content.items()]
+                    [f"--- Fichier: {path} ---\n{content[:700]}\n" for path, content in files_content.items()]
                 )
 
         result = await asyncio.to_thread(
