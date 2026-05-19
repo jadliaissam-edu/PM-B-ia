@@ -17,6 +17,7 @@ def _get_chat() -> ChatOpenAI:
         openai_api_key=OPENAI_API_KEY,
         openai_api_base=OPENAI_API_BASE,
     )
+    
 
 
 def identify_relevant_files(files_tree: list, user_query: str) -> list:

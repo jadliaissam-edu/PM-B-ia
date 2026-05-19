@@ -15,7 +15,7 @@ load_dotenv()
 # ─── LLM (OpenRouter) ────────────────────────────────────────────────────────
 OPENAI_API_KEY  = os.getenv("OPENROUTER_API_KEY", "")
 OPENAI_API_BASE = "https://openrouter.ai/api/v1"
-LLM_MODEL       = "openai/gpt-oss-120b:free"
+LLM_MODEL       = os.getenv("LLM_MODEL", "openai/gpt-oss-120b:free")
 
 # ─── Filtres de fichiers GitHub ───────────────────────────────────────────────
 ALLOWED_EXTENSIONS = (
