@@ -5,7 +5,7 @@ import time
 import httpx
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
-from config.config import OPENAI_API_KEY, OPENAI_API_BASE, LLM_MODEL
+from config.config import OPENAI_API_KEY, OPENAI_API_BASE, LLM_MODEL, BACKEND_BASE_URL
 
 # -----------------------------------------------------------------
 # Singleton ChatOpenAI
@@ -135,7 +135,7 @@ def fetch_openapi_schemas() -> str:
         return _swagger_cache["data"]
         
     try:
-        resp = httpx.get("http://localhost:8080/v3/api-docs", timeout=3.0)
+        resp = httpx.get(f"{BACKEND_BASE_URL}/v3/api-docs", timeout=10.0)
         if resp.status_code == 200:
             openapi = resp.json()
             paths = openapi.get("paths", {})
@@ -176,12 +176,16 @@ def fetch_openapi_schemas() -> str:
 
 def generate_entity(user_query: str, context: dict, repo_context: str = "") -> dict:
     """
-    Detecte l'intention de creation et genere les donnees JSON de l'entite.
+    Détecte les intentions de création dans l'ordre hiérarchique et génère un flux d'étapes.
     Retourne:
       {
-        "intent": "task" | "workspace" | "space" | "sprint" | "liste" | "unknown",
-        "entity": { ... champs a envoyer au backend ... },
-        "endpoint": "POST /api/tasks",
+        "flow": [
+          {
+            "intent": "task" | "workspace" | "space" | "sprint" | "liste" | "folder",
+            "endpoint": "POST /api/...",
+            "entity": { ... }
+          }
+        ],
         "explanation": "message pour l'utilisateur"
       }
     """
@@ -208,19 +212,21 @@ def generate_entity(user_query: str, context: dict, repo_context: str = "") -> d
             f"Contexte disponible (IDs deja connus) :\n{context_str}\n\n"
             f"{repo_instruction}\n"
             "INSTRUCTIONS :\n"
-            "1. Analyse la demande. Si l'utilisateur demande à créer une entité, trouve l'endpoint POST approprié dans la documentation Swagger.\n"
-            "2. Détermine l'intention ('intent') parmi : task, workspace, space, sprint, liste, folder.\n"
-            "3. Si l'utilisateur demande ce qu'il peut générer, ou si la demande n'est pas claire, mets 'intent' à 'unknown'.\n"
+            "1. Analyse la demande. Si l'utilisateur demande à créer une ou plusieurs entités (y compris une hiérarchie d'entités comme Workspace -> Space -> Folder -> List/sprint -> Task, ou plusieurs entités du même type comme 'crée 3 sprints X, Y, Z'), identifie toutes les étapes requises dans l'ordre chronologique de création.\n"
+            "2. Pour chaque entité à générer, trouve l'endpoint POST approprié dans la documentation Swagger.\n"
+            "3. Si la demande n'est pas claire ou si l'utilisateur ne demande pas de création, retourne un tableau 'flow' vide [].\n"
             "4. Génère un JSON valide avec exactement ces clés :\n"
-            "   - 'intent': Le nom de l'entité (ou 'unknown').\n"
-            "   - 'endpoint': L'endpoint exact trouvé (ex: POST /api/tasks) (ou null si unknown).\n"
-            "   - 'entity': L'objet JSON correspondant aux champs requis par l'API (ou null si unknown). Si l'utilisateur demande plusieurs entités du meme type, retourne un tableau d'objets (max 5).\n"
-            "   - 'explanation': Un message clair en Markdown. Si tu as généré une entité, confirme l'action d'une manière naturelle et professionnelle SANS MENTIONNER d'endpoint API ni de détails techniques (ne donne jamais l'URL ou le chemin API à l'utilisateur). Si 'intent' est 'unknown', ce message DOIT lister à l'utilisateur tout ce qu'il peut générer (Espace de travail, Espace, Dossier, Liste, Sprint, Tâche) avec une brève description de leur utilité fonctionnelle (sans détails techniques ou endpoints).\n"
-            "5. Utilise les IDs du contexte si applicables (ex: workspaceId, spaceId, listeId, folderId, sprintId).\n"
+            "   - 'flow': Un tableau ordonné d'objets étapes. Chaque étape doit contenir :\n"
+            "       - 'intent': Le type de l'entité (parmi : task, workspace, space, sprint, liste, folder).\n"
+            "       - 'endpoint': L'endpoint exact trouvé (ex: POST /api/workspaces).\n"
+            "       - 'entity': L'objet JSON correspondant aux champs requis par l'API.\n"
+            "   - 'explanation': Un message clair en Markdown. Confirme l'action globale d'une manière naturelle, humaine et professionnelle SANS MENTIONNER d'endpoint API, de chemin, ou de détails techniques (ne donne jamais l'URL ou le chemin API à l'utilisateur).\n"
+            "5. Règle de dépendance (Marqueur) : Si une entité (ex: Space) dépend d'une entité parente (ex: Workspace) qui va être créée plus tôt dans ce même flux, utilise la valeur '__PENDING__' pour la clé de l'ID parent (ex: 'workspaceId': '__PENDING__'). Cela servira de marqueur au frontend pour pré-remplir le formulaire. Si l'ID parent est déjà dans le contexte et n'est pas créé dans ce flux, utilise l'ID du contexte.\n"
             "6. Si un utilisateur mentionne une personne (ex: 'assigne à Ilyass'), cherche son ID dans la liste 'members' fournie dans le contexte et utilise-le pour 'assigneeId'.\n"
             "7. Pour status utilise TO_DO par defaut. Pour priority utilise MEDIUM par defaut.\n"
             "8. IMPORTANT : Pour une tâche (task), un dossier (folder) ou un espace (space), génère obligatoirement une description pertinente et élaborée dans le champ 'description'. Pour un sprint, génère obligatoirement un objectif de sprint pertinent dans le champ 'goal'.\n"
-            "9. Retourne UNIQUEMENT le JSON de la réponse, sans markdown en dehors du JSON.\n\n"
+            "9. INTERDICTION ABSOLUE : N'inclus JAMAIS d'explications techniques, d'exemples d'appels HTTP (ex: 'POST /api/sprints'), de corps JSON (ex: 'payload JSON'), de blocs de code ou de curl dans la clé 'explanation'. Si l'utilisateur demande de créer des sprints (ex: backend, frontend, IA), crée-les sous forme de 3 objets distincts dans le tableau 'flow'. Le champ 'explanation' doit simplement confirmer le succès de façon polie et chaleureuse (ex: 'Bien sûr ! J'ai configuré les 3 sprints demandés (backend, frontend, IA) pour vous.').\n"
+            "10. Retourne UNIQUEMENT le JSON de la réponse, sans markdown en dehors du JSON.\n\n"
             "JSON :"
         )
         
@@ -231,69 +237,29 @@ def generate_entity(user_query: str, context: dict, repo_context: str = "") -> d
 
         try:
             parsed = json.loads(raw)
-            entity = parsed.get("entity")
-            if parsed.get("intent") != "unknown" and entity:
-                explanation = parsed.get("explanation") or f"L'IA a généré dynamiquement via Swagger un(e) {parsed.get('intent')}."
-                if isinstance(entity, list):
-                    entity_items = [item for item in entity if isinstance(item, dict)]
-                    if not entity_items:
-                        return {
-                            "intent": "unknown",
-                            "entity": None,
-                            "endpoint": None,
-                            "explanation": "Je n'ai pas pu interpreter correctement les entites demandees. Merci de reformuler."
-                        }
-                    if len(entity_items) > 5:
-                        return {
-                            "intent": "unknown",
-                            "entity": None,
-                            "endpoint": None,
-                            "explanation": "Désolé, je ne peux créer qu'un maximum de 5 éléments à la fois. Veuillez réduire votre demande."
-                        }
-                    for item in entity_items:
-                        _inject_context(item)
-                    return {
-                        "intent": parsed.get("intent", "unknown"),
-                        "entity": entity_items,
-                        "endpoint": parsed.get("endpoint"),
-                        "explanation": explanation
-                    }
-                if isinstance(entity, dict):
-                    _inject_context(entity)
-                    return {
-                        "intent": parsed.get("intent", "unknown"),
-                        "entity": entity,
-                        "endpoint": parsed.get("endpoint"),
-                        "explanation": explanation
-                    }
-                if isinstance(entity, list):
-                    entity_items = [item for item in entity if isinstance(item, dict)]
-                    if not entity_items:
-                        return {
-                            "intent": "unknown",
-                            "entity": None,
-                            "endpoint": None,
-                            "explanation": "Je n'ai pas pu interpreter correctement les entites demandees. Merci de reformuler."
-                        }
-                    if len(entity_items) > 5:
-                        return {
-                            "intent": "unknown",
-                            "entity": None,
-                            "endpoint": None,
-                            "explanation": "Désolé, je ne peux créer qu'un maximum de 5 éléments à la fois. Veuillez réduire votre demande."
-                        }
-                    entity_items = [_inject_context(item) for item in entity_items]
-                    return {
-                        "intent": parsed.get("intent", "unknown"),
-                        "entity": entity_items,
-                        "endpoint": parsed.get("endpoint"),
-                        "explanation": explanation
-                    }
+            flow = parsed.get("flow")
+            explanation = parsed.get("explanation") or "L'IA a généré un flux d'actions."
+            
+            if isinstance(flow, list):
+                valid_flow = []
+                for item in flow:
+                    if not isinstance(item, dict):
+                        continue
+                    intent = item.get("intent", "unknown")
+                    entity = item.get("entity")
+                    endpoint = item.get("endpoint")
+                    
+                    if intent != "unknown" and isinstance(entity, dict):
+                        _inject_context(entity)
+                        valid_flow.append({
+                            "intent": intent,
+                            "endpoint": endpoint,
+                            "entity": entity
+                        })
+                
                 return {
-                    "intent": "unknown",
-                    "entity": None,
-                    "endpoint": None,
-                    "explanation": "Je n'ai pas pu interpreter correctement l'entite demandee. Merci de reformuler."
+                    "flow": valid_flow,
+                    "explanation": explanation
                 }
         except json.JSONDecodeError as e:
             print("Failed to parse dynamic swagger generation:", e)
@@ -308,9 +274,7 @@ def generate_entity(user_query: str, context: dict, repo_context: str = "") -> d
 
     if detected_type == "unknown":
         return {
-            "intent": "unknown",
-            "entity": None,
-            "endpoint": None,
+            "flow": [],
             "explanation": "Je n'ai pas compris quelle entite creer. Essaie : 'genere une tache X', 'cree un workspace Y', etc."
         }
 
@@ -351,35 +315,29 @@ def generate_entity(user_query: str, context: dict, repo_context: str = "") -> d
 
     if isinstance(entity_data, list):
         entity_data = [item for item in entity_data if isinstance(item, dict)]
-        if not entity_data:
-            return {
-                "intent": "unknown",
-                "entity": None,
-                "endpoint": None,
-                "explanation": "Je n'ai pas pu interpreter correctement les entites demandees. Merci de reformuler."
-            }
-        if len(entity_data) > 5:
-            return {
-                "intent": "unknown",
-                "entity": None,
-                "endpoint": None,
-                "explanation": "Désolé, je ne peux créer qu'un maximum de 5 éléments à la fois. Veuillez réduire votre demande."
-            }
         entity_data = [_inject_context(item) for item in entity_data]
     elif isinstance(entity_data, dict):
         _inject_context(entity_data)
     else:
-        return {
-            "intent": "unknown",
-            "entity": None,
-            "endpoint": None,
-            "explanation": "Je n'ai pas pu interpreter correctement l'entite demandee. Merci de reformuler."
-        }
+        entity_data = {}
+
+    flow_steps = []
+    if isinstance(entity_data, list):
+        for item in entity_data:
+            flow_steps.append({
+                "intent": detected_type,
+                "endpoint": schema["endpoint"],
+                "entity": item
+            })
+    else:
+        flow_steps.append({
+            "intent": detected_type,
+            "endpoint": schema["endpoint"],
+            "entity": entity_data
+        })
 
     return {
-        "intent": detected_type,
-        "entity": entity_data,
-        "endpoint": schema["endpoint"],
+        "flow": flow_steps,
         "explanation": f"L'IA a genere un(e) {detected_type} base sur votre demande. Verifiez les details ci-dessous avant de confirmer."
     }
 
