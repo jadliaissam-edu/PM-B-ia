@@ -17,4 +17,4 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer $PAT" \
             https://api.github.com/repos/jadliaissam-edu/PM-B-infra/actions/workflows/simple-ci-cd.yml/dispatches \
-            -d '{"ref":"main"}'
+            -d '{"ref":"main","inputs":{"component":"ia"}}'
