@@ -17,6 +17,30 @@ OPENAI_API_KEY  = os.getenv("OPENROUTER_API_KEY", "")
 OPENAI_API_BASE = "https://openrouter.ai/api/v1"
 LLM_MODEL       = os.getenv("LLM_MODEL", "openai/gpt-oss-120b:free")
 
+# ─── Embeddings (RAG vectoriel) ──────────────────────────────────────────────
+# EMBEDDING_PROVIDER :
+#   "local"      -> sentence-transformers, 100% gratuit, tourne en local (defaut)
+#   "openrouter" -> embeddings via OpenRouter (necessite OPENROUTER_API_KEY)
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "local").lower()
+
+# Modele d'embedding local (sentence-transformers). all-MiniLM-L6-v2 = 384 dims,
+# ~80 Mo, rapide et suffisant pour du code/documentation.
+EMBEDDING_MODEL_LOCAL = os.getenv("EMBEDDING_MODEL_LOCAL", "all-MiniLM-L6-v2")
+
+# Modele d'embedding distant (utilise uniquement si EMBEDDING_PROVIDER=openrouter).
+EMBEDDING_MODEL_REMOTE = os.getenv("EMBEDDING_MODEL_REMOTE", "openai/text-embedding-3-small")
+
+# ─── Index vectoriel Chroma ──────────────────────────────────────────────────
+# Repertoire de persistance de l'index Chroma (un dossier par depot).
+CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "./.chroma")
+
+# Decoupage des fichiers en chunks avant embedding.
+CHUNK_SIZE    = int(os.getenv("CHUNK_SIZE", "1000"))
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "150"))
+
+# Nombre de chunks remontes par la recherche vectorielle.
+RAG_TOP_K = int(os.getenv("RAG_TOP_K", "8"))
+
 # ─── Filtres de fichiers GitHub ───────────────────────────────────────────────
 ALLOWED_EXTENSIONS = (
     ".java", ".py", ".js", ".ts", ".md", ".xml",
