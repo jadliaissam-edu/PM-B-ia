@@ -5,7 +5,8 @@ import time
 import httpx
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
-from config.config import OPENAI_API_KEY, OPENAI_API_BASE, LLM_MODEL, BACKEND_BASE_URL
+from config.config import OPENAI_API_KEY, OPENAI_API_BASE, LLM_MODEL, BACKEND_BASE_URL, RAG_TOP_K
+from services.embedding_service import search_many
 
 # -----------------------------------------------------------------
 # Singleton ChatOpenAI
@@ -38,6 +39,28 @@ def identify_relevant_files(files_tree: list, user_query: str) -> list:
     return [p for p in paths if p in files_tree][:5]
 
 
+def retrieve_relevant_chunks(
+    repo_keys: list[str],
+    user_query: str,
+    top_k: int = RAG_TOP_K,
+) -> list[dict]:
+    """
+    Retrieval vectoriel : interroge les index Chroma des depots et retourne
+    les chunks de code les plus proches de la question.
+
+    Args:
+        repo_keys: Identifiants des depots indexes, ex. ["owner/repo@main"].
+        user_query: Question de l'utilisateur.
+        top_k: Nombre de chunks a remonter.
+
+    Returns:
+        Liste de { "repo_key", "path", "content", "score" } tries par pertinence.
+    """
+    if not repo_keys:
+        return []
+    return search_many(repo_keys, user_query, top_k=top_k)
+
+
 def answer_repo_question(files_content: dict, user_query: str) -> str:
     chat = _get_chat()
 
@@ -46,9 +69,12 @@ def answer_repo_question(files_content: dict, user_query: str) -> str:
         context += f"\n--- {path} ---\n{content[:1500]}\n"
 
     prompt = (
-        f"Tu es un Tech Lead expert. Voici des extraits de code :\n{context}\n"
+        f"Tu es un Tech Lead expert. Voici des extraits de code, chacun precede "
+        f"de son fichier, du symbole concerne (fonction/classe/methode) et de ses "
+        f"numeros de ligne :\n{context}\n"
         f"Question : \"{user_query}\"\n\n"
         "Reponds de facon precise et technique en Francais. "
+        "Cite les fichiers et symboles pertinents (ex: `fichier.py::ma_fonction`). "
         "N'entre pas dans les details sauf si explicitement demande."
     )
 

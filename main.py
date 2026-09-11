@@ -32,9 +32,16 @@ import uvicorn
 import os
 import tempfile
 
-from config.config import LLM_MODEL, BACKEND_BASE_URL
-from services.github_service import fetch_file_tree, fetch_file_content
-from services.rag_service import identify_relevant_files, answer_repo_question, generate_entity, generate_ask_ai_content
+from config.config import LLM_MODEL, BACKEND_BASE_URL, RAG_TOP_K
+from services.github_service import fetch_file_tree, fetch_file_content, get_latest_commit
+from services.rag_service import answer_repo_question, generate_entity, generate_ask_ai_content
+from services.embedding_service import (
+    delete_repo_index,
+    get_indexed_commit,
+    index_repo,
+    is_indexed,
+    search_many,
+)
 from services.encryption_service import encrypt_token, decrypt_token
 
 # ─── Initialisation de l'application ────────────────────────────────────────
@@ -404,10 +411,71 @@ async def remove_repository(request: DeleteRepoRequest):
     )
     if not deleted:
         raise HTTPException(status_code=404, detail="Dépôt introuvable.")
+
+    # Nettoyage de l'index vectoriel associe (toutes branches confondues).
+    await asyncio.to_thread(delete_repo_index, f"{request.owner}/{request.repo}@main")
+    await asyncio.to_thread(delete_repo_index, f"{request.owner}/{request.repo}@master")
+
     return {"status": "ok", "message": f"Dépôt '{request.owner}/{request.repo}' supprimé."}
 
 
 # ─── Endpoints — Analyse IA ─────────────────────────────────────────────────
+
+def _repo_key(repo_info: RepoInfo) -> str:
+    """Identifiant unique d'un depot pour l'index vectoriel."""
+    return f"{repo_info.owner}/{repo_info.repo}@{repo_info.branch}"
+
+
+def _ensure_repo_index(repo_info: RepoInfo, token: Optional[str]) -> str:
+    """
+    Garantit que l'index vectoriel du depot est a jour.
+
+    Strategie :
+      1. Recupere le SHA du dernier commit sur la branche.
+      2. Si l'index existe deja pour ce meme commit, on ne fait rien.
+      3. Sinon, on telecharge les fichiers et on (re)construit l'index Chroma.
+
+    Returns:
+        La cle du depot (repo_key).
+    """
+    repo_key = _repo_key(repo_info)
+
+    try:
+        latest_sha = get_latest_commit(
+            repo_info.owner, repo_info.repo, repo_info.branch, token
+        )
+    except req.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            raise HTTPException(
+                status_code=404,
+                detail=f"La branche '{repo_info.branch}' est introuvable pour le dépôt '{repo_info.owner}/{repo_info.repo}'. Veuillez supprimer le dépôt et le rajouter avec la bonne branche (ex: master)."
+            ) from e
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail=f"Erreur d'accès au dépôt '{repo_info.owner}/{repo_info.repo}': {e.response.text}"
+        ) from e
+
+    # Index deja a jour pour ce commit -> rien a faire.
+    if is_indexed(repo_key) and get_indexed_commit(repo_key) == latest_sha:
+        print(f"[_ensure_repo_index] Index deja a jour pour {repo_key} (commit {latest_sha[:8]}).")
+        return repo_key
+
+    print(f"[_ensure_repo_index] (Re)indexation de {repo_key} (commit {latest_sha[:8]})...")
+    files = fetch_file_tree(
+        repo_info.owner, repo_info.repo, repo_info.branch, token
+    )
+
+    files_content: dict[str, str] = {}
+    for path in files:
+        content = fetch_file_content(
+            path, repo_info.owner, repo_info.repo, repo_info.branch, token
+        )
+        if content:
+            files_content[path] = content
+
+    index_repo(repo_key, files_content, commit_sha=latest_sha)
+    return repo_key
+
 
 async def _get_repo_context(
     repositories: list[RepoInfo],
@@ -415,70 +483,45 @@ async def _get_repo_context(
     user_id:      str = "anonymous",
 ) -> tuple[dict, list[str]]:
     """
-    Construit le contexte de code pour le LLM en récupérant les fichiers
-    pertinents de chaque dépôt.
+    Construit le contexte de code pour le LLM via une recherche vectorielle.
 
-    Pour les dépôts privés : récupère le token chiffré depuis le backend Java,
-    puis déchiffre en mémoire vive uniquement.
+    Pour chaque depot :
+      1. Resolution du token (depots prives) et mise a jour de l'index Chroma.
+      2. Recherche des chunks les plus proches de la question (similarity_search).
+    Les chunks de tous les depots sont ensuite fusionnes par score.
+
+    Returns:
+        (files_content, files_used) ou files_content = { "repo/path": contenu }
+        et files_used = liste des chemins prefixes utilises.
     """
 
-    async def _fetch_tree(repo_info: RepoInfo):
+    async def _prepare(repo_info: RepoInfo) -> tuple[str, str]:
         token = await asyncio.to_thread(
             _resolve_token_for_repo,
             user_id, repo_info.owner, repo_info.repo, repo_info.is_private,
         )
-        try:
-            files = await asyncio.to_thread(
-                fetch_file_tree,
-                repo_info.owner, repo_info.repo, repo_info.branch, token,
-            )
-        except req.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"La branche '{repo_info.branch}' est introuvable pour le dépôt '{repo_info.owner}/{repo_info.repo}'. Veuillez supprimer le dépôt et le rajouter avec la bonne branche (ex: master)."
-                ) from e
-            raise HTTPException(
-                status_code=e.response.status_code,
-                detail=f"Erreur d'accès au dépôt '{repo_info.owner}/{repo_info.repo}': {e.response.text}"
-            ) from e
+        repo_key = await asyncio.to_thread(_ensure_repo_index, repo_info, token)
+        return repo_key, token
 
-        repo_key = f"{repo_info.owner}/{repo_info.repo}"
-        prefixed = [f"[{repo_key}] {f}" for f in files]
-        return repo_key, repo_info, prefixed, token
+    prepared = await asyncio.gather(*[_prepare(r) for r in repositories])
+    repo_keys = [repo_key for repo_key, _ in prepared]
 
-    tree_results = await asyncio.gather(*[_fetch_tree(r) for r in repositories])
+    # Recherche vectorielle sur tous les depots, fusionnee par score.
+    hits = await asyncio.to_thread(search_many, repo_keys, user_query, RAG_TOP_K)
 
-    all_combined_files: list[str] = []
-    repo_map:  dict = {}
-    token_map: dict = {}
+    files_content: dict[str, str] = {}
+    files_used: list[str] = []
+    for hit in hits:
+        # En-tete explicite : fichier + symbole + lignes, pour un contexte lisible.
+        symbol = hit.get("symbol", "<file>")
+        start = hit.get("start_line", 1)
+        end = hit.get("end_line", 1)
+        prefixed = f"[{hit['repo_key']}] {hit['path']}::{symbol} (L{start}-{end})"
+        files_used.append(prefixed)
+        # On concatene les chunks d'un meme fichier pour un contexte plus riche.
+        files_content[prefixed] = files_content.get(prefixed, "") + hit["content"] + "\n"
 
-    for repo_key, repo_info, prefixed_files, token in tree_results:
-        all_combined_files.extend(prefixed_files)
-        repo_map[repo_key]  = repo_info
-        token_map[repo_key] = token
-
-    relevant_prefixed_files = await asyncio.to_thread(
-        identify_relevant_files, all_combined_files, user_query
-    )
-
-    async def _fetch_content(prefixed_path: str):
-        if not prefixed_path.startswith("[") or "] " not in prefixed_path:
-            return prefixed_path, ""
-        repo_key, actual_path = prefixed_path[1:].split("] ", 1)
-        repo_info = repo_map.get(repo_key)
-        if not repo_info:
-            return prefixed_path, ""
-        token = token_map.get(repo_key)
-        content = await asyncio.to_thread(
-            fetch_file_content,
-            actual_path, repo_info.owner, repo_info.repo, repo_info.branch, token,
-        )
-        return prefixed_path, content
-
-    content_results = await asyncio.gather(*[_fetch_content(p) for p in relevant_prefixed_files])
-    files_content = {path: content for path, content in content_results if content}
-    return files_content, relevant_prefixed_files
+    return files_content, files_used
 
 
 @app.post("/api/ia/repo")
@@ -505,6 +548,39 @@ async def analyze_repo(request: RepoAnalysisRequest):
             "files_used": relevant_prefixed_files,
             "model":      LLM_MODEL,
         }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/ia/repos/reindex")
+async def reindex_repositories(request: RepoAnalysisRequest):
+    """
+    Force la (re)construction de l'index vectoriel des dépôts fournis.
+    Utile après un changement de branche ou pour préchauffer le RAG.
+    """
+    try:
+        if not request.repositories:
+            raise HTTPException(status_code=422, detail="Aucun dépôt fourni.")
+
+        async def _reindex(repo_info: RepoInfo) -> dict:
+            token = await asyncio.to_thread(
+                _resolve_token_for_repo,
+                request.user_id, repo_info.owner, repo_info.repo, repo_info.is_private,
+            )
+            repo_key = await asyncio.to_thread(_ensure_repo_index, repo_info, token)
+            return {
+                "repo_key": repo_key,
+                "commit":   await asyncio.to_thread(get_indexed_commit, repo_key),
+                "indexed":  await asyncio.to_thread(is_indexed, repo_key),
+            }
+
+        results = await asyncio.gather(*[_reindex(r) for r in request.repositories])
+        return {"status": "ok", "repositories": results}
 
     except HTTPException:
         raise
