@@ -42,7 +42,7 @@ def _signature(node: ast.AST, source_lines: list[str]) -> str:
     end = getattr(node, "body", [None])[0]
     end_line = (end.lineno - 1) if end is not None else start
 
-    # On remonte jusqu'a la ligne contenant le ':' de fin de signature.
+    # La signature s'etend jusqu'a la ligne se terminant par ':'.
     collected: list[str] = []
     for i in range(start, min(end_line + 1, len(source_lines))):
         collected.append(source_lines[i])
@@ -50,7 +50,6 @@ def _signature(node: ast.AST, source_lines: list[str]) -> str:
             break
 
     signature = "\n".join(collected).strip()
-    # Nettoyage : on retire le ':' final et on normalise les espaces.
     signature = re.sub(r":\s*$", "", signature)
     return re.sub(r"\s+", " ", signature).strip()
 
@@ -115,18 +114,17 @@ def _walk_python(
         if isinstance(child, ast.ClassDef):
             symbol = f"{prefix}{child.name}"
             units.append(_render_symbol(child, source_lines, symbol, "class"))
-            # On descend dans la classe pour recuperer ses methodes.
             _walk_python(child, source_lines, prefix=f"{symbol}.", units=units)
 
         elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
             symbol = f"{prefix}{child.name}"
             kind = "method" if prefix else "function"
             units.append(_render_symbol(child, source_lines, symbol, kind))
-            # Fonctions imbriquees (closures) : on les indexe aussi.
+            # Les fonctions imbriquees (closures) sont indexees sous leur parent.
             _walk_python(child, source_lines, prefix=f"{symbol}.", units=units)
 
         else:
-            # On continue a descendre (if/try/with au niveau module).
+            # Descend dans les blocs de niveau module (if/try/with).
             _walk_python(child, source_lines, prefix, units)
 
 

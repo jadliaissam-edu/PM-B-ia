@@ -290,7 +290,7 @@ def index_repo(
 
     with _index_lock:
         client = _get_client()
-        # On repart d'un index propre pour eviter les chunks obsoletes.
+        # Reconstruit l'index de zero pour eviter les chunks obsoletes.
         try:
             client.delete_collection(_collection_name(repo_key))
         except Exception:

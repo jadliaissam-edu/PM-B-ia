@@ -41,6 +41,17 @@ CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "150"))
 # Nombre de chunks remontes par la recherche vectorielle.
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "8"))
 
+# ─── Agent (tool-calling) ────────────────────────────────────────────────────
+# AGENT_ENABLED : active la boucle agentique (tool-calling) pour /api/ia/generate.
+#   "true"  -> l'agent choisit lui-meme les outils (recherche code, lecture fichier)
+#              et propose des creations d'entites (confirmation humaine requise).
+#   "false" -> comportement historique : un seul appel LLM qui retourne le JSON.
+# Desactivable car tous les modeles ne supportent pas le tool-calling de facon fiable.
+AGENT_ENABLED = os.getenv("AGENT_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+
+# Nombre maximal d'iterations de la boucle agentique (garde-fou anti-boucle infinie).
+AGENT_MAX_ITERATIONS = int(os.getenv("AGENT_MAX_ITERATIONS", "6"))
+
 # ─── Filtres de fichiers GitHub ───────────────────────────────────────────────
 ALLOWED_EXTENSIONS = (
     ".java", ".py", ".js", ".ts", ".md", ".xml",

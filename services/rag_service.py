@@ -5,8 +5,7 @@ import time
 import httpx
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
-from config.config import OPENAI_API_KEY, OPENAI_API_BASE, LLM_MODEL, BACKEND_BASE_URL, RAG_TOP_K
-from services.embedding_service import search_many
+from config.config import OPENAI_API_KEY, OPENAI_API_BASE, LLM_MODEL, BACKEND_BASE_URL
 
 # -----------------------------------------------------------------
 # Singleton ChatOpenAI
@@ -18,47 +17,6 @@ def _get_chat() -> ChatOpenAI:
         openai_api_key=OPENAI_API_KEY,
         openai_api_base=OPENAI_API_BASE,
     )
-    
-
-
-def identify_relevant_files(files_tree: list, user_query: str) -> list:
-    """LLM 1 : Identifie les fichiers les plus pertinents."""
-    chat = _get_chat()
-    tree_str = "\n".join(files_tree)
-
-    prompt = (
-        f"Arborescence de depots GitHub :\n{tree_str}\n\n"
-        f"Question : \"{user_query}\"\n\n"
-        "Retourne UNIQUEMENT les 3 a 5 chemins de fichiers (tels qu'ils apparaissent "
-        "dans la liste ci-dessus) les plus utiles pour repondre a cette question, "
-        "un par ligne, sans texte supplementaire."
-    )
-
-    response = chat.invoke([HumanMessage(content=prompt)])
-    paths = [p.strip() for p in response.content.split("\n") if p.strip()]
-    return [p for p in paths if p in files_tree][:5]
-
-
-def retrieve_relevant_chunks(
-    repo_keys: list[str],
-    user_query: str,
-    top_k: int = RAG_TOP_K,
-) -> list[dict]:
-    """
-    Retrieval vectoriel : interroge les index Chroma des depots et retourne
-    les chunks de code les plus proches de la question.
-
-    Args:
-        repo_keys: Identifiants des depots indexes, ex. ["owner/repo@main"].
-        user_query: Question de l'utilisateur.
-        top_k: Nombre de chunks a remonter.
-
-    Returns:
-        Liste de { "repo_key", "path", "content", "score" } tries par pertinence.
-    """
-    if not repo_keys:
-        return []
-    return search_many(repo_keys, user_query, top_k=top_k)
 
 
 def answer_repo_question(files_content: dict, user_query: str) -> str:

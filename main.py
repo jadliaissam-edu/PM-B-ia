@@ -10,11 +10,6 @@ Architecture de sécurité des PAT GitHub :
      via POST /api/repos/upsert — la base de données PostgreSQL ne stocke jamais de token clair.
   4. À chaque appel d'analyse, le token chiffré est récupéré depuis le backend Java,
      puis déchiffré en RAM — il ne transite jamais en clair entre services.
-
-Nettoyage :
-  - Toute logique "GitHub App" (OAuth, client_id, client_secret) a été supprimée.
-  - Le fichier database_service.py (SQLite local) a été supprimé — la persistance
-    se fait désormais via le backend Java Spring Boot (PostgreSQL).
 """
 
 import os
@@ -22,19 +17,17 @@ import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 import asyncio
-import json
 import requests as req
-from fastapi import FastAPI, HTTPException, File, UploadFile, Form
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Optional
 import uvicorn
-import os
-import tempfile
 
-from config.config import LLM_MODEL, BACKEND_BASE_URL, RAG_TOP_K
+from config.config import LLM_MODEL, BACKEND_BASE_URL, RAG_TOP_K, AGENT_ENABLED
 from services.github_service import fetch_file_tree, fetch_file_content, get_latest_commit
 from services.rag_service import answer_repo_question, generate_entity, generate_ask_ai_content
+from services.agent_service import run_agent
 from services.embedding_service import (
     delete_repo_index,
     get_indexed_commit,
@@ -518,7 +511,7 @@ async def _get_repo_context(
         end = hit.get("end_line", 1)
         prefixed = f"[{hit['repo_key']}] {hit['path']}::{symbol} (L{start}-{end})"
         files_used.append(prefixed)
-        # On concatene les chunks d'un meme fichier pour un contexte plus riche.
+        # Concatene les chunks d'un meme fichier pour un contexte plus riche.
         files_content[prefixed] = files_content.get(prefixed, "") + hit["content"] + "\n"
 
     return files_content, files_used
@@ -595,8 +588,32 @@ async def generate_from_intent(request: GenerateRequest):
     """
     Détecte l'intention de l'utilisateur et retourne un objet JSON structuré
     représentant l'entité à créer (tâche, workspace, sprint, etc.).
+
+    Deux modes :
+      - AGENT_ENABLED=true  : boucle agentique (tool-calling). L'agent explore le
+        code via search_code et propose les créations via propose_create_*.
+        Les propositions restent soumises à confirmation humaine côté frontend.
+      - AGENT_ENABLED=false : comportement historique (un seul appel LLM).
     """
     try:
+        if AGENT_ENABLED:
+            repo_keys: list[str] = []
+            if request.repositories:
+                async def _prepare(repo_info: RepoInfo) -> str:
+                    token = await asyncio.to_thread(
+                        _resolve_token_for_repo,
+                        request.user_id, repo_info.owner, repo_info.repo, repo_info.is_private,
+                    )
+                    return await asyncio.to_thread(_ensure_repo_index, repo_info, token)
+
+                repo_keys = list(await asyncio.gather(*[_prepare(r) for r in request.repositories]))
+
+            result = await asyncio.to_thread(
+                run_agent, request.user_query, repo_keys, request.context or {}
+            )
+            return result
+
+        # ─── Mode historique (fallback) ──────────────────────────────────────
         repo_context_str = ""
         if request.repositories:
             files_content, _ = await _get_repo_context(
